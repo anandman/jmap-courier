@@ -45,47 +45,6 @@ await client.sendEmail({
 | Cyrus | `https://your-server/.well-known/jmap` |
 | Stalwart | `https://your-server/.well-known/jmap` |
 
-## Multi-Account Support
-
-### Environment Variables
-
-```bash
-export JMAP_API_TOKEN="your-token"
-export JMAP_SESSION_URL="https://api.fastmail.com/jmap/session"
-export JMAP_EMAIL="user@example.com"  # Optional account name
-```
-
-### Config File
-
-Create `~/.config/jmap-courier/accounts.json`:
-
-```json
-{
-    "accounts": [
-        {
-            "name": "personal",
-            "token": "token-1",
-            "sessionUrl": "https://api.fastmail.com/jmap/session"
-        },
-        {
-            "name": "work",
-            "token": "token-2", 
-            "sessionUrl": "https://api.fastmail.com/jmap/session"
-        }
-    ],
-    "defaultAccount": "personal"
-}
-```
-
-Then use the account manager:
-
-```typescript
-import { getAccountManager, getClient } from 'jmap-courier';
-
-const manager = getAccountManager();
-const account = manager.getCurrentAccount();
-const client = getClient(account);
-```
 
 ## API Reference
 
