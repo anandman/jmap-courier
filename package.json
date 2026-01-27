@@ -1,0 +1,41 @@
+{
+    "name": "jmap-courier",
+    "version": "1.0.0",
+    "description": "TypeScript JMAP client for email (RFC 8620/8621) - works with any JMAP provider",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "test": "vitest run",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "jmap",
+        "email",
+        "mail",
+        "imap",
+        "rfc8620",
+        "rfc8621",
+        "fastmail",
+        "cyrus",
+        "stalwart"
+    ],
+    "author": "",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.6.0",
+        "vitest": "^2.1.0"
+    },
+    "engines": {
+        "node": ">=20.0.0"
+    }
+}
