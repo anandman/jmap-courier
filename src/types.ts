@@ -255,3 +255,69 @@ export interface EmailSummary {
     isRead: boolean;
     isFlagged: boolean;
 }
+
+// ============================================================================
+// JMAP Contacts Types (RFC 9610 / JSContact RFC 9553)
+// ============================================================================
+
+export interface AddressBook {
+    id: string;
+    name: string;
+    parentId: string | null;
+    isDefault: boolean;
+}
+
+export interface ContactCard {
+    id: string;
+    addressBookId?: string;
+    uid?: string;
+    prodId?: string;
+    kind?: 'individual' | 'group' | 'org' | 'location' | 'device' | 'application';
+    name?: ContactName;
+    emails?: Record<string, ContactEmail>;
+    phones?: Record<string, ContactPhone>;
+    addresses?: Record<string, ContactAddress>;
+    organizations?: Record<string, ContactOrganization>;
+    notes?: string;
+}
+
+export interface ContactName {
+    fullName?: string;
+}
+
+export interface ContactEmail {
+    address: string;
+    contexts?: Record<string, boolean>;
+}
+
+export interface ContactPhone {
+    number: string;
+    contexts?: Record<string, boolean>;
+}
+
+export interface ContactAddress {
+    fullAddress?: string;
+    street?: string;
+    city?: string;
+    region?: string;
+    country?: string;
+    postcode?: string;
+    contexts?: Record<string, boolean>;
+}
+
+export interface ContactOrganization {
+    name: string;
+    title?: string;
+}
+
+export interface ContactCardQuery {
+    accountId: string;
+    filter?: ContactCardFilter;
+    limit?: number;
+}
+
+export interface ContactCardFilter {
+    addressBookId?: string;
+    text?: string;
+}
+

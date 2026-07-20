@@ -16,12 +16,16 @@ import type {
     EmailFilter,
     EmailSort,
     Identity,
+    AddressBook,
+    ContactCard,
+    ContactCardFilter,
 } from './types.js';
 
 const JMAP_CAPABILITIES = {
     core: 'urn:ietf:params:jmap:core',
     mail: 'urn:ietf:params:jmap:mail',
     submission: 'urn:ietf:params:jmap:submission',
+    contacts: 'urn:ietf:params:jmap:contacts',
 };
 
 export class JMAPClient {
@@ -80,8 +84,13 @@ export class JMAPClient {
     async request(methodCalls: JMAPMethodCall[]): Promise<JMAPResponse> {
         await this.ensureSession();
 
+        const using = [JMAP_CAPABILITIES.core, JMAP_CAPABILITIES.mail, JMAP_CAPABILITIES.submission];
+        if (this.session?.capabilities[JMAP_CAPABILITIES.contacts]) {
+            using.push(JMAP_CAPABILITIES.contacts);
+        }
+
         const request: JMAPRequest = {
-            using: [JMAP_CAPABILITIES.core, JMAP_CAPABILITIES.mail, JMAP_CAPABILITIES.submission],
+            using,
             methodCalls,
         };
 
@@ -563,6 +572,327 @@ export class JMAPClient {
         await this.setEmailKeywords([params.originalEmailId], ['$forwarded'], undefined);
 
         return result;
+    }
+
+    // ==========================================================================
+    // Mailbox Writing / Management Operations
+    // ==========================================================================
+
+    /**
+     * Create a new mailbox
+     */
+    async createMailbox(name: string, parentId?: string | null): Promise<Mailbox> {
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Mailbox/set', {
+                accountId: this.accountId,
+                create: {
+                    'new-mailbox': {
+                        name,
+                        parentId: parentId || null,
+                    }
+                }
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`Mailbox/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            created?: Record<string, Mailbox>;
+            notCreated?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notCreated && Object.keys(setResult.notCreated).length > 0) {
+            throw new Error(`Failed to create mailbox: ${JSON.stringify(setResult.notCreated)}`);
+        }
+
+        const serverMailbox = setResult.created?.['new-mailbox'];
+        if (!serverMailbox) {
+            throw new Error('Created mailbox not returned in response');
+        }
+
+        return {
+            ...serverMailbox,
+            name,
+            parentId: parentId || null,
+        };
+    }
+
+    /**
+     * Rename a mailbox
+     */
+    async renameMailbox(id: string, name: string): Promise<void> {
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Mailbox/set', {
+                accountId: this.accountId,
+                update: {
+                    [id]: {
+                        name,
+                    }
+                }
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`Mailbox/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
+            throw new Error(`Failed to rename mailbox: ${JSON.stringify(setResult.notUpdated)}`);
+        }
+    }
+
+    /**
+     * Delete a mailbox
+     */
+    async deleteMailbox(id: string, onDestroyRemoveEmails = false): Promise<void> {
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Mailbox/set', {
+                accountId: this.accountId,
+                destroy: [id],
+                onDestroyRemoveEmails,
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`Mailbox/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notDestroyed?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notDestroyed && Object.keys(setResult.notDestroyed).length > 0) {
+            throw new Error(`Failed to delete mailbox: ${JSON.stringify(setResult.notDestroyed)}`);
+        }
+    }
+
+    /**
+     * Move a mailbox under a new parent (reorganize hierarchy)
+     */
+    async moveMailbox(id: string, parentId: string | null): Promise<void> {
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Mailbox/set', {
+                accountId: this.accountId,
+                update: {
+                    [id]: {
+                        parentId: parentId || null,
+                    }
+                }
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`Mailbox/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
+            throw new Error(`Failed to move mailbox: ${JSON.stringify(setResult.notUpdated)}`);
+        }
+    }
+
+    // ==========================================================================
+    // Contacts Operations (RFC 9610)
+    // ==========================================================================
+
+    /**
+     * Get address books
+     */
+    async getAddressBooks(): Promise<AddressBook[]> {
+        await this.ensureSession();
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['AddressBook/get', {
+                accountId: contactsAccountId,
+                ids: null,
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`AddressBook/get failed: ${JSON.stringify(result)}`);
+        }
+
+        return (result as { list: AddressBook[] }).list;
+    }
+
+    /**
+     * Query contacts (search/list)
+     */
+    async queryContacts(filter?: ContactCardFilter, limit = 50): Promise<string[]> {
+        await this.ensureSession();
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['ContactCard/query', {
+                accountId: contactsAccountId,
+                filter,
+                limit,
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`ContactCard/query failed: ${JSON.stringify(result)}`);
+        }
+
+        return (result as { ids: string[] }).ids;
+    }
+
+    /**
+     * Get contacts by ID
+     */
+    async getContacts(ids: string[]): Promise<ContactCard[]> {
+        await this.ensureSession();
+
+        if (ids.length === 0) {
+            return [];
+        }
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['ContactCard/get', {
+                accountId: contactsAccountId,
+                ids,
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`ContactCard/get failed: ${JSON.stringify(result)}`);
+        }
+
+        return (result as { list: ContactCard[] }).list;
+    }
+
+    /**
+     * Create a new contact
+     */
+    async createContact(addressBookId: string, card: Omit<ContactCard, 'id'>): Promise<ContactCard> {
+        await this.ensureSession();
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['ContactCard/set', {
+                accountId: contactsAccountId,
+                create: {
+                    'new-contact': {
+                        ...card,
+                        addressBookId,
+                    }
+                }
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`ContactCard/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            created?: Record<string, ContactCard>;
+            notCreated?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notCreated && Object.keys(setResult.notCreated).length > 0) {
+            throw new Error(`Failed to create contact: ${JSON.stringify(setResult.notCreated)}`);
+        }
+
+        const createdCard = setResult.created?.['new-contact'];
+        if (!createdCard) {
+            throw new Error('Created contact not returned in response');
+        }
+
+        return {
+            ...card,
+            ...createdCard,
+        } as unknown as ContactCard;
+    }
+
+    /**
+     * Update an existing contact (JSContact patch)
+     */
+    async updateContact(id: string, patch: Record<string, unknown>): Promise<void> {
+        await this.ensureSession();
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['ContactCard/set', {
+                accountId: contactsAccountId,
+                update: {
+                    [id]: patch,
+                }
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`ContactCard/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
+            throw new Error(`Failed to update contact: ${JSON.stringify(setResult.notUpdated)}`);
+        }
+    }
+
+    /**
+     * Delete a contact
+     */
+    async deleteContact(id: string): Promise<void> {
+        await this.ensureSession();
+
+        const contactsAccountId = this.session!.primaryAccounts[JMAP_CAPABILITIES.contacts] || this.accountId!;
+
+        const response = await this.request([
+            ['ContactCard/set', {
+                accountId: contactsAccountId,
+                destroy: [id],
+            }, 'a'],
+        ]);
+
+        const [responseName, result] = response.methodResponses[0];
+        if (responseName === 'error') {
+            throw new Error(`ContactCard/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notDestroyed?: Record<string, { type: string; description?: string }>;
+        };
+
+        if (setResult.notDestroyed && Object.keys(setResult.notDestroyed).length > 0) {
+            throw new Error(`Failed to delete contact: ${JSON.stringify(setResult.notDestroyed)}`);
+        }
     }
 }
 

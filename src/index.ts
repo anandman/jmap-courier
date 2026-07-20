@@ -39,3 +39,11 @@ export type {
     AccountConfig,
     MultiAccountConfig,
 } from './types.js';
+
+// Types - Contacts
+export type {
+    AddressBook,
+    ContactCard,
+    ContactCardFilter,
+} from './types.js';
+
