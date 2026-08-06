@@ -6,7 +6,12 @@
  */
 
 // Core client
-export { JMAPClient, getClient, clearClientCache } from './jmap-client.js';
+export {
+    JMAPClient,
+    getClient,
+    clearClientCache,
+    WELL_KNOWN_MAILBOX_ROLES,
+} from './jmap-client.js';
 
 // Types - Core JMAP
 export type {

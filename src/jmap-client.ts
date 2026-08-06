@@ -28,6 +28,38 @@ const JMAP_CAPABILITIES = {
     contacts: 'urn:ietf:params:jmap:contacts',
 };
 
+/**
+ * Names callers reach for, mapped to the JMAP role that actually identifies the
+ * mailbox (RFC 8621 §2).
+ *
+ * The visible name of a standard mailbox varies by provider and by locale --
+ * Fastmail calls the junk folder "Spam", other providers call trash "Bin" -- and
+ * the user can rename any of them. The role does not change, so it is the only
+ * dependable way to find these. Aliases are included because a person or a model
+ * will ask for "Junk" regardless of what the folder is actually called.
+ */
+export const WELL_KNOWN_MAILBOX_ROLES: Readonly<Record<string, string>> = {
+    inbox: 'inbox',
+    sent: 'sent',
+    'sent items': 'sent',
+    'sent messages': 'sent',
+    drafts: 'drafts',
+    draft: 'drafts',
+    archive: 'archive',
+    'all mail': 'archive',
+    junk: 'junk',
+    spam: 'junk',
+    'junk email': 'junk',
+    trash: 'trash',
+    bin: 'trash',
+    deleted: 'trash',
+    'deleted items': 'trash',
+    'deleted messages': 'trash',
+    snoozed: 'snoozed',
+    scheduled: 'scheduled',
+    templates: 'templates',
+};
+
 export class JMAPClient {
     private session: JMAPSession | null = null;
     private accountId: string | null = null;
@@ -170,15 +202,72 @@ export class JMAPClient {
     }
 
     /**
-     * Find mailbox by ID or name
+     * Builds the full path of a mailbox, e.g. `migrated/Junk`.
+     *
+     * Names are only unique among siblings, so the leaf name alone cannot
+     * distinguish two folders called Junk in different parents.
+     */
+    private mailboxPath(mailbox: Mailbox, byId: Map<string, Mailbox>): string {
+        const segments = [mailbox.name];
+        const seen = new Set([mailbox.id]);
+        let parentId = mailbox.parentId;
+        // `seen` guards against a cycle in parentId, which would otherwise hang
+        // the caller rather than return a wrong answer.
+        while (parentId && !seen.has(parentId)) {
+            const parent = byId.get(parentId);
+            if (!parent) break;
+            segments.unshift(parent.name);
+            seen.add(parent.id);
+            parentId = parent.parentId;
+        }
+        return segments.join('/');
+    }
+
+    /**
+     * Find a mailbox by ID, well-known name, path or name.
+     *
+     * Resolution order matters, and role has to come before name. A mailbox's
+     * *role* is what makes it the junk folder; its name is a label the user can
+     * change, and providers localise it -- Fastmail names the junk folder
+     * "Spam". Matching on name first meant "Junk" could not find it at all, and
+     * instead matched an empty `migrated/Junk` left behind by an IMAP import.
+     * The response was well formed and the count was zero, so nothing indicated
+     * that the folder searched was not the folder meant.
+     *
+     * Name-first was fragile even where it worked: "Sent", "Archive", "Drafts"
+     * and "Inbox" all had shadows in that same import, and resolved correctly
+     * only because the real folder happened to come first in the array. One of
+     * those shadows held more mail than the folder it shadowed.
+     *
+     * Path is tried before the bare name so a shadowed folder stays reachable
+     * -- `migrated/Junk` still resolves to exactly itself.
      */
     async resolveMailbox(idOrName: string): Promise<Mailbox | null> {
         const mailboxes = await this.getMailboxes();
-        // First try by ID
+
         const byId = mailboxes.find(m => m.id === idOrName);
         if (byId) return byId;
-        // Then by name (case-insensitive)
-        return mailboxes.find(m => m.name.toLowerCase() === idOrName.toLowerCase()) || null;
+
+        const query = idOrName.trim().toLowerCase();
+        if (!query) return null;
+
+        const role = WELL_KNOWN_MAILBOX_ROLES[query];
+        if (role) {
+            const byRole = mailboxes.find(m => m.role === role);
+            if (byRole) return byRole;
+        }
+
+        const idIndex = new Map(mailboxes.map(m => [m.id, m]));
+        const byPath = mailboxes.find(
+            m => this.mailboxPath(m, idIndex).toLowerCase() === query
+        );
+        if (byPath) return byPath;
+
+        // Fall back to the leaf name. Where several siblings-by-name collide,
+        // prefer one that carries a role: it is the real folder, and the
+        // duplicate is almost always an import artefact.
+        const byName = mailboxes.filter(m => m.name.toLowerCase() === query);
+        return byName.find(m => m.role !== null) ?? byName[0] ?? null;
     }
 
     // ==========================================================================
