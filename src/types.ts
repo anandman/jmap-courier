@@ -246,6 +246,16 @@ export interface MultiAccountConfig {
 export interface EmailSummary {
     id: string;
     threadId: string;
+    /**
+     * RFC 5322 Message-ID. An array because the header may legally repeat,
+     * though in practice it holds one entry; null when the message carries no
+     * Message-ID at all, which happens for unsubmitted drafts and some
+     * gateway-originated mail. Callers must handle the absence rather than
+     * indexing [0] blindly.
+     */
+    messageId: string[] | null;
+    inReplyTo: string[] | null;
+    references: string[] | null;
     subject: string | null;
     from: EmailAddress[] | null;
     to: EmailAddress[] | null;

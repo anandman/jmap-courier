@@ -310,10 +310,15 @@ export class JMAPClient {
             return [];
         }
 
+        // messageId/inReplyTo/references are header-derived properties returned by
+        // this same Email/get -- they cost no extra round trip and no body fetch.
+        // Callers need messageId to build an RFC 5322 `message://` link that opens
+        // a desktop mail client; the JMAP id only addresses the web app.
         const defaultProperties = [
             'id', 'blobId', 'threadId', 'mailboxIds', 'keywords',
             'receivedAt', 'from', 'to', 'cc', 'bcc', 'replyTo',
             'subject', 'sentAt', 'hasAttachment', 'preview',
+            'messageId', 'inReplyTo', 'references',
         ];
 
         const response = await this.request([
@@ -346,6 +351,7 @@ export class JMAPClient {
                     'id', 'blobId', 'threadId', 'mailboxIds', 'keywords',
                     'receivedAt', 'from', 'to', 'cc', 'bcc', 'replyTo',
                     'subject', 'sentAt', 'hasAttachment', 'preview',
+                    'messageId', 'inReplyTo', 'references',
                     'bodyStructure', 'bodyValues', 'textBody', 'htmlBody', 'attachments',
                 ],
                 fetchAllBodyValues: true,
