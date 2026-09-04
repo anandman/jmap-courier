@@ -29,6 +29,49 @@ const JMAP_CAPABILITIES = {
 };
 
 /**
+ * Which capability each JMAP data type belongs to, so a request declares what
+ * its own method calls need and nothing else.
+ *
+ * RFC 8620 4.1: `using` names the capabilities required by the methods in this
+ * request. Declaring more is not harmless -- a server that scopes a credential
+ * rejects the *whole request* on an unpermitted capability, before any method
+ * runs. Sending `submission` on every request therefore made a read-only token
+ * fail on `Email/query`, a pure read, with a 403 naming a capability the search
+ * never needed.
+ *
+ * Splits follow RFC 8621: Mailbox/Thread/Email/SearchSnippet are mail, while
+ * Identity and EmailSubmission are submission. Contacts are RFC 9610.
+ */
+const TYPE_CAPABILITIES: Record<string, string> = {
+    Mailbox: JMAP_CAPABILITIES.mail,
+    Thread: JMAP_CAPABILITIES.mail,
+    Email: JMAP_CAPABILITIES.mail,
+    SearchSnippet: JMAP_CAPABILITIES.mail,
+    Identity: JMAP_CAPABILITIES.submission,
+    EmailSubmission: JMAP_CAPABILITIES.submission,
+    AddressBook: JMAP_CAPABILITIES.contacts,
+    ContactCard: JMAP_CAPABILITIES.contacts,
+    Contact: JMAP_CAPABILITIES.contacts,
+    ContactGroup: JMAP_CAPABILITIES.contacts,
+};
+
+/**
+ * The capability set a batch of method calls actually requires.
+ *
+ * Core is always present: RFC 8620 defines the request envelope itself. An
+ * unrecognised type contributes nothing, so the server answers with
+ * `unknownMethod` for that one call rather than refusing the batch.
+ */
+export function capabilitiesFor(methodCalls: JMAPMethodCall[]): string[] {
+    const using = new Set<string>([JMAP_CAPABILITIES.core]);
+    for (const [method] of methodCalls) {
+        const capability = TYPE_CAPABILITIES[String(method).split('/')[0]];
+        if (capability) using.add(capability);
+    }
+    return [...using];
+}
+
+/**
  * Names callers reach for, mapped to the JMAP role that actually identifies the
  * mailbox (RFC 8621 §2).
  *
@@ -116,13 +159,8 @@ export class JMAPClient {
     async request(methodCalls: JMAPMethodCall[]): Promise<JMAPResponse> {
         await this.ensureSession();
 
-        const using = [JMAP_CAPABILITIES.core, JMAP_CAPABILITIES.mail, JMAP_CAPABILITIES.submission];
-        if (this.session?.capabilities[JMAP_CAPABILITIES.contacts]) {
-            using.push(JMAP_CAPABILITIES.contacts);
-        }
-
         const request: JMAPRequest = {
-            using,
+            using: capabilitiesFor(methodCalls),
             methodCalls,
         };
 
