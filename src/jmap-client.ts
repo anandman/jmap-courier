@@ -21,7 +21,7 @@ import type {
     ContactCardFilter,
 } from './types.js';
 
-const JMAP_CAPABILITIES = {
+export const JMAP_CAPABILITIES = {
     core: 'urn:ietf:params:jmap:core',
     mail: 'urn:ietf:params:jmap:mail',
     submission: 'urn:ietf:params:jmap:submission',
@@ -62,6 +62,13 @@ const TYPE_CAPABILITIES: Record<string, string> = {
  * unrecognised type contributes nothing, so the server answers with
  * `unknownMethod` for that one call rather than refusing the batch.
  */
+/** What a missing capability means in the words a user would use. */
+const CAPABILITY_LABELS: Record<string, string> = {
+    [JMAP_CAPABILITIES.mail]: 'read mail',
+    [JMAP_CAPABILITIES.submission]: 'send mail',
+    [JMAP_CAPABILITIES.contacts]: 'access contacts',
+};
+
 export function capabilitiesFor(methodCalls: JMAPMethodCall[]): string[] {
     const using = new Set<string>([JMAP_CAPABILITIES.core]);
     for (const [method] of methodCalls) {
@@ -156,11 +163,48 @@ export class JMAPClient {
     /**
      * Make a JMAP API request
      */
+    /**
+     * The capability URIs this credential may actually use.
+     *
+     * Fastmail scopes the session's capability set to the token: a read-only
+     * token advertises mail without submission, and a mail-only token omits
+     * contacts entirely. Verified against two live tokens, both of which list
+     * exactly core, mail and submission.
+     */
+    async getCapabilities(): Promise<Set<string>> {
+        await this.ensureSession();
+        return new Set(Object.keys(this.session?.capabilities ?? {}));
+    }
+
+    async hasCapability(capability: string): Promise<boolean> {
+        return (await this.getCapabilities()).has(capability);
+    }
+
     async request(methodCalls: JMAPMethodCall[]): Promise<JMAPResponse> {
         await this.ensureSession();
 
+        const using = capabilitiesFor(methodCalls);
+
+        // Refuse locally rather than spend a round trip earning a 403. Only an
+        // explicitly absent capability blocks: a server that advertises its
+        // capabilities server-wide rather than per-credential will list it and
+        // we behave exactly as before, letting the server decide.
+        const available = new Set(Object.keys(this.session?.capabilities ?? {}));
+        const missing = using.filter((capability) => !available.has(capability));
+        if (missing.length > 0) {
+            const wanted = missing
+                .map((capability) => CAPABILITY_LABELS[capability] ?? capability)
+                .join(' and ');
+            throw new Error(
+                `This account's credentials cannot ${wanted}. ` +
+                    `The server did not grant ${missing.join(', ')} for this token, ` +
+                    `so ${methodCalls.map(([method]) => method).join(', ')} cannot run. ` +
+                    `Use a token with the required scope, or an operation that does not need it.`
+            );
+        }
+
         const request: JMAPRequest = {
-            using: capabilitiesFor(methodCalls),
+            using,
             methodCalls,
         };
 

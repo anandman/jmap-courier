@@ -12,6 +12,7 @@ export {
     clearClientCache,
     WELL_KNOWN_MAILBOX_ROLES,
     capabilitiesFor,
+    JMAP_CAPABILITIES,
 } from './jmap-client.js';
 
 // Types - Core JMAP
