@@ -278,13 +278,39 @@ export class JMAPClient {
      * Query emails with filters
      */
     async queryEmails(filter?: EmailFilter, sort?: EmailSort[], limit = 50): Promise<string[]> {
+        const { ids } = await this.queryEmailsPage(filter, sort, { limit });
+        return ids;
+    }
+
+    /**
+     * One page of a query, with the figures needed to know there is another.
+     *
+     * `queryEmails` returns bare ids, which cannot express "there were 49
+     * matches and you are holding 20 of them". The count was never expensive to
+     * obtain -- `calculateTotal` has always been set on this query and the
+     * answer was simply discarded -- so a caller that could not tell a complete
+     * result from a truncated one was paying for the information and then
+     * throwing it away.
+     */
+    async queryEmailsPage(
+        filter?: EmailFilter,
+        sort?: EmailSort[],
+        options: { limit?: number; position?: number } = {}
+    ): Promise<{ ids: string[]; total: number; position: number }> {
         await this.ensureSession();
+
+        const limit = options.limit ?? 50;
+        // A negative position is relative to the end of the result set in JMAP,
+        // which would silently return a different page than a caller expecting
+        // an offset intends.
+        const position = Math.max(0, Math.trunc(options.position ?? 0));
 
         const query: EmailQuery = {
             accountId: this.accountId!,
             filter,
             sort: sort || [{ property: 'receivedAt', isAscending: false }],
             limit,
+            position,
             calculateTotal: true,
         };
 
@@ -297,7 +323,15 @@ export class JMAPClient {
             throw new Error(`Email/query failed: ${JSON.stringify(result)}`);
         }
 
-        return (result as { ids: string[] }).ids;
+        const page = result as { ids: string[]; total?: number; position?: number };
+        return {
+            ids: page.ids,
+            // calculateTotal is a MAY in RFC 8620: a server is permitted to omit
+            // it. Falling back to what we can see beats reporting zero, which a
+            // caller would read as "no matches".
+            total: page.total ?? position + page.ids.length,
+            position: page.position ?? position,
+        };
     }
 
     /**
