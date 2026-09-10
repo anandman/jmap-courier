@@ -32,6 +32,7 @@ export type {
     EmailBodyValue,
     EmailHeader,
     EmailSummary,
+    EmailChanges,
     EmailFilter,
     EmailSort,
 } from './types.js';

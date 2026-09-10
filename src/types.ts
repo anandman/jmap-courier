@@ -243,6 +243,22 @@ export interface MultiAccountConfig {
 // Convenience Types
 // ============================================================================
 
+/** One page of the Email change feed, with the state to resume from. */
+export interface EmailChanges {
+    /** Pass as `sinceState` next time. Only store it after a clean return. */
+    newState: string;
+    /** More changes remain beyond maxChanges; call again with newState. */
+    hasMoreChanges: boolean;
+    created: Email[];
+    updated: Email[];
+    /**
+     * Genuinely expunged. A message moved to Trash arrives in `updated` with
+     * changed mailboxIds, not here -- watching only this list is how an archive
+     * silently diverges from the mailbox.
+     */
+    destroyedIds: string[];
+}
+
 export interface EmailSummary {
     id: string;
     threadId: string;

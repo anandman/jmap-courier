@@ -12,6 +12,7 @@ import type {
     AccountConfig,
     Mailbox,
     Email,
+    EmailChanges,
     EmailQuery,
     EmailFilter,
     EmailSort,
@@ -20,6 +21,22 @@ import type {
     ContactCard,
     ContactCardFilter,
 } from './types.js';
+
+/**
+ * The properties every summary-shaped read asks for.
+ *
+ * Shared by getEmails and getEmailChanges so the two cannot drift: a field
+ * added for search that the change feed did not also request would give a
+ * caller the same message with different shapes depending on how it arrived.
+ */
+const EMAIL_SUMMARY_PROPERTIES = [
+    'id', 'blobId', 'threadId', 'mailboxIds', 'keywords',
+    'receivedAt', 'from', 'to', 'cc', 'bcc', 'replyTo',
+    'subject', 'sentAt', 'hasAttachment', 'preview',
+    // Header-derived, and free on this same Email/get -- no extra round trip
+    // and no body fetch. Callers need messageId to build a message:// link.
+    'messageId', 'inReplyTo', 'references',
+];
 
 export const JMAP_CAPABILITIES = {
     core: 'urn:ietf:params:jmap:core',
@@ -417,6 +434,101 @@ export class JMAPClient {
     }
 
     /**
+     * The current Email state, with no changes.
+     *
+     * Bootstrapping must be an explicit act. A delta call given no prior state
+     * could plausibly return the whole mailbox instead, which is the kind of
+     * thing that looks like it worked -- so a caller with no state gets a
+     * starting point and nothing else, and fetches history by other means.
+     */
+    async getEmailState(): Promise<string> {
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Email/get', { accountId: this.accountId, ids: [] }, 'a'],
+        ]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`Email/get failed: ${JSON.stringify(result)}`);
+        }
+        return (result as { state: string }).state;
+    }
+
+    /**
+     * What changed since a previous Email state.
+     *
+     * One HTTP request. Email/changes names the ids and two Email/get calls
+     * back-reference them (RFC 8620 3.7), so created and updated arrive fully
+     * populated without a second round trip. The alternative -- query then get,
+     * per filter -- is what makes a polling consumer expensive.
+     *
+     * Scope is account-wide: RFC 8620 defines /changes per data type per
+     * account, with no mailbox filter. Sent is therefore included for free, and
+     * a caller wanting a narrower view filters on the returned mailboxIds.
+     */
+    async getEmailChanges(
+        sinceState: string,
+        options: { maxChanges?: number; properties?: string[] } = {}
+    ): Promise<EmailChanges> {
+        await this.ensureSession();
+
+        const maxChanges = Math.max(1, Math.trunc(options.maxChanges ?? 128));
+        const properties = options.properties ?? EMAIL_SUMMARY_PROPERTIES;
+        const ref = (path: string) => ({
+            resultOf: 'c',
+            name: 'Email/changes',
+            path,
+        });
+
+        const response = await this.request([
+            ['Email/changes', { accountId: this.accountId, sinceState, maxChanges }, 'c'],
+            ['Email/get', { accountId: this.accountId, '#ids': ref('/created'), properties }, 'gc'],
+            ['Email/get', { accountId: this.accountId, '#ids': ref('/updated'), properties }, 'gu'],
+        ]);
+
+        const [changesName, changesResult] = response.methodResponses[0];
+        if (changesName === 'error') {
+            const error = changesResult as { type?: string };
+            // The one failure a caller must never mistake for "nothing changed".
+            // The server can no longer reconstruct the delta from the state
+            // given, so the only correct response is a full resync -- and a
+            // silent empty list here would freeze a cache while looking healthy.
+            if (error.type === 'cannotCalculateChanges') {
+                throw new Error(
+                    'cannotCalculateChanges: the server can no longer compute changes since that state. ' +
+                        'It is too old or was invalidated. Discard the stored state and perform a full resync; ' +
+                        'do not treat this as an empty result.'
+                );
+            }
+            throw new Error(`Email/changes failed: ${JSON.stringify(changesResult)}`);
+        }
+
+        const changes = changesResult as {
+            newState: string;
+            hasMoreChanges: boolean;
+            created: string[];
+            updated: string[];
+            destroyed: string[];
+        };
+
+        const listFrom = (index: number): Email[] => {
+            const [name, result] = response.methodResponses[index];
+            // A failed Email/get must not be reported as "no messages changed".
+            if (name === 'error') throw new Error(`Email/get failed: ${JSON.stringify(result)}`);
+            return (result as { list: Email[] }).list;
+        };
+
+        return {
+            newState: changes.newState,
+            hasMoreChanges: changes.hasMoreChanges === true,
+            created: listFrom(1),
+            updated: listFrom(2),
+            destroyedIds: changes.destroyed ?? [],
+        };
+    }
+
+    /**
      * Get emails by ID with specified properties
      */
     async getEmails(ids: string[], properties?: string[]): Promise<Email[]> {
@@ -430,18 +542,13 @@ export class JMAPClient {
         // this same Email/get -- they cost no extra round trip and no body fetch.
         // Callers need messageId to build an RFC 5322 `message://` link that opens
         // a desktop mail client; the JMAP id only addresses the web app.
-        const defaultProperties = [
-            'id', 'blobId', 'threadId', 'mailboxIds', 'keywords',
-            'receivedAt', 'from', 'to', 'cc', 'bcc', 'replyTo',
-            'subject', 'sentAt', 'hasAttachment', 'preview',
-            'messageId', 'inReplyTo', 'references',
-        ];
+
 
         const response = await this.request([
             ['Email/get', {
                 accountId: this.accountId,
                 ids,
-                properties: properties || defaultProperties,
+                properties: properties || EMAIL_SUMMARY_PROPERTIES,
             }, 'a'],
         ]);
 
