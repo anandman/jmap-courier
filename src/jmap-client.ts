@@ -129,6 +129,12 @@ export const WELL_KNOWN_MAILBOX_ROLES: Readonly<Record<string, string>> = {
 
 /** What both a draft and a sent message are built from. */
 export interface DraftFields {
+    /**
+     * Address to send as. Matched against the account's identities; an address
+     * that is not one of them is refused rather than silently replaced, since a
+     * draft from the wrong identity is only noticed after it is sent.
+     */
+    from?: string;
     to: string[];
     subject: string;
     textBody: string;
@@ -800,12 +806,27 @@ export class JMAPClient {
      * it, which is the whole point -- sending is not a smaller version of
      * drafting.
      */
-    async createDraft(params: DraftFields): Promise<{ emailId: string; mailboxId: string }> {
+    async createDraft(
+        params: DraftFields
+    ): Promise<{ emailId: string; mailboxId: string; from: string }> {
         await this.ensureSession();
 
         const identities = await this.getIdentities();
         if (identities.length === 0) {
             throw new Error('No sending identity found');
+        }
+
+        // A requested identity must exist. Falling back to the default would
+        // produce a draft from the wrong address, which is the kind of mistake
+        // nobody notices until after it has been sent.
+        const identity = params.from
+            ? identities.find((i) => i.email.toLowerCase() === params.from!.toLowerCase())
+            : identities[0];
+        if (!identity) {
+            throw new Error(
+                `"${params.from}" is not an identity on this account. Available: ` +
+                    identities.map((i) => i.email).join(', ')
+            );
         }
 
         // Drafts only. sendEmail falls back to Inbox because the message is
@@ -821,7 +842,7 @@ export class JMAPClient {
         const response = await this.request([
             ['Email/set', {
                 accountId: this.accountId,
-                create: { draft: buildDraftEmail(params, drafts.id, identities[0]) },
+                create: { draft: buildDraftEmail(params, drafts.id, identity) },
             }, 'a'],
         ]);
 
@@ -844,7 +865,7 @@ export class JMAPClient {
             throw new Error('Draft creation returned no id and no error');
         }
 
-        return { emailId, mailboxId: drafts.id };
+        return { emailId, mailboxId: drafts.id, from: identity.email };
     }
 
     /**
