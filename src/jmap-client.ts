@@ -924,7 +924,7 @@ export class JMAPClient {
      */
     async createDraft(
         params: DraftFields
-    ): Promise<{ emailId: string; mailboxId: string; from: string }> {
+    ): Promise<{ emailId: string; mailboxId: string; from: string; sendable: boolean }> {
         await this.ensureSession();
 
         const identities = await this.getIdentities();
@@ -935,14 +935,16 @@ export class JMAPClient {
         // A requested identity must exist. Falling back to the default would
         // produce a draft from the wrong address, which is the kind of mistake
         // nobody notices until after it has been sent.
-        const identity = params.from ? matchIdentity(identities, params.from) : identities[0];
-        if (!identity) {
-            throw new Error(
-                `This account cannot send as "${params.from}". Available identities: ` +
-                    identities.map((i) => i.email).join(', ') +
-                    ' (a *@domain entry permits any address on that domain).'
-            );
-        }
+        // A draft is not a submission, and Fastmail stores any From on one --
+        // verified. Refusing here would be a limiter this client invented, and
+        // it would block exactly the ad-hoc per-correspondent addresses a
+        // catch-all domain exists for.
+        //
+        // So: never refuse, but say whether the address is actually sendable.
+        // A draft that cannot be sent is worth knowing about now rather than at
+        // the moment of sending.
+        const matched = params.from ? matchIdentity(identities, params.from) : identities[0];
+        const identity = matched ?? { email: params.from!, name: null };
 
         // Drafts only. sendEmail falls back to Inbox because the message is
         // leaving immediately; a draft that silently landed in the Inbox would
@@ -980,7 +982,14 @@ export class JMAPClient {
             throw new Error('Draft creation returned no id and no error');
         }
 
-        return { emailId, mailboxId: drafts.id, from: params.from ?? identity.email };
+        return {
+            emailId,
+            mailboxId: drafts.id,
+            from: params.from ?? identity.email,
+            // False when no identity authorises this From: the draft exists and is
+            // editable, but submitting it will be refused by the server.
+            sendable: Boolean(matched),
+        };
     }
 
     /**
