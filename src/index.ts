@@ -13,6 +13,7 @@ export {
     WELL_KNOWN_MAILBOX_ROLES,
     capabilitiesFor,
     buildDraftEmail,
+    matchIdentity,
     type DraftFields,
     JMAP_CAPABILITIES,
 } from './jmap-client.js';

@@ -155,14 +155,43 @@ export interface DraftFields {
  * drift, and the difference would surface as a message that looks right in
  * Drafts and wrong once sent.
  */
+/**
+ * The identity permitted to send as a given address.
+ *
+ * Fastmail represents a catch-all domain as a literal wildcard identity --
+ * `*@example.com` -- so an exact match alone rejects every address on a domain
+ * the user owns. An exact identity wins; otherwise the wildcard for that domain
+ * does. An address on a domain with neither is genuinely not sendable, and is
+ * refused rather than quietly replaced.
+ */
+export function matchIdentity<T extends { email: string }>(
+    identities: readonly T[],
+    from: string
+): T | undefined {
+    const want = from.trim().toLowerCase();
+    const exact = identities.find((i) => i.email.toLowerCase() === want);
+    if (exact) return exact;
+
+    const at = want.lastIndexOf('@');
+    if (at < 0) return undefined;
+    const wildcard = `*${want.slice(at)}`;
+    return identities.find((i) => i.email.toLowerCase() === wildcard);
+}
+
 export function buildDraftEmail(
     params: DraftFields,
     draftsMailboxId: string,
-    identity: { email: string; name?: string | null }
+    identity: { email: string; name?: string | null },
+    /**
+     * The address to put in From. Differs from the identity's own email when a
+     * wildcard identity authorises it -- writing `*@example.com` into a header
+     * would produce an unsendable message.
+     */
+    fromAddress?: string
 ): Record<string, unknown> {
     const email: Record<string, unknown> = {
         mailboxIds: { [draftsMailboxId]: true },
-        from: [{ email: identity.email, name: identity.name || null }],
+        from: [{ email: fromAddress ?? identity.email, name: identity.name || null }],
         to: params.to.map((address) => ({ email: address, name: null })),
         subject: params.subject,
         textBody: [{ partId: 'text', type: 'text/plain' }],
@@ -819,13 +848,12 @@ export class JMAPClient {
         // A requested identity must exist. Falling back to the default would
         // produce a draft from the wrong address, which is the kind of mistake
         // nobody notices until after it has been sent.
-        const identity = params.from
-            ? identities.find((i) => i.email.toLowerCase() === params.from!.toLowerCase())
-            : identities[0];
+        const identity = params.from ? matchIdentity(identities, params.from) : identities[0];
         if (!identity) {
             throw new Error(
-                `"${params.from}" is not an identity on this account. Available: ` +
-                    identities.map((i) => i.email).join(', ')
+                `This account cannot send as "${params.from}". Available identities: ` +
+                    identities.map((i) => i.email).join(', ') +
+                    ' (a *@domain entry permits any address on that domain).'
             );
         }
 
@@ -842,7 +870,7 @@ export class JMAPClient {
         const response = await this.request([
             ['Email/set', {
                 accountId: this.accountId,
-                create: { draft: buildDraftEmail(params, drafts.id, identity) },
+                create: { draft: buildDraftEmail(params, drafts.id, identity, params.from) },
             }, 'a'],
         ]);
 
@@ -865,7 +893,7 @@ export class JMAPClient {
             throw new Error('Draft creation returned no id and no error');
         }
 
-        return { emailId, mailboxId: drafts.id, from: identity.email };
+        return { emailId, mailboxId: drafts.id, from: params.from ?? identity.email };
     }
 
     /**
