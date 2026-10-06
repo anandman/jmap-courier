@@ -825,6 +825,93 @@ export class JMAPClient {
     }
 
     /**
+     * Every message in a conversation, oldest first.
+     *
+     * Following a thread previously cost one call per message, and the caller
+     * had to reassemble the order itself. Thread/get names the members and a
+     * back-referenced Email/get fetches them, so this is one round trip.
+     */
+    async getThread(
+        threadId: string,
+        options: { properties?: string[]; withBodies?: boolean } = {}
+    ): Promise<Email[]> {
+        await this.ensureSession();
+
+        const properties = options.properties ?? [
+            ...EMAIL_SUMMARY_PROPERTIES,
+            ...(options.withBodies ? ['bodyStructure', 'bodyValues', 'textBody', 'htmlBody', 'attachments'] : []),
+        ];
+
+        const response = await this.request([
+            ['Thread/get', { accountId: this.accountId, ids: [threadId] }, 't'],
+            ['Email/get', {
+                accountId: this.accountId,
+                '#ids': { resultOf: 't', name: 'Thread/get', path: '/list/*/emailIds' },
+                properties,
+                ...(options.withBodies ? { fetchAllBodyValues: true } : {}),
+            }, 'e'],
+        ]);
+
+        const [threadName, threadResult] = response.methodResponses[0];
+        if (threadName === 'error') {
+            throw new Error(`Thread/get failed: ${JSON.stringify(threadResult)}`);
+        }
+        // A thread id that matches nothing is not an empty conversation.
+        const list = (threadResult as { list: { id: string }[] }).list;
+        if (!list || list.length === 0) {
+            throw new Error(`No thread with id "${threadId}".`);
+        }
+
+        const [emailName, emailResult] = response.methodResponses[1];
+        if (emailName === 'error') {
+            throw new Error(`Email/get failed: ${JSON.stringify(emailResult)}`);
+        }
+
+        // Thread order is by receivedAt; JMAP does not promise the get preserves it.
+        return [...(emailResult as { list: Email[] }).list].sort((a, b) =>
+            (a.receivedAt ?? '').localeCompare(b.receivedAt ?? '')
+        );
+    }
+
+    /**
+     * Download one blob — an attachment's bytes.
+     *
+     * The session's downloadUrl is a URI template (RFC 6570) with accountId,
+     * blobId, type and name placeholders. Substituting by hand rather than
+     * assuming a fixed shape, because providers differ in where they put them.
+     */
+    async downloadBlob(
+        blobId: string,
+        options: { type?: string; name?: string; maxBytes?: number } = {}
+    ): Promise<{ bytes: Buffer; contentType: string; truncated: boolean }> {
+        await this.ensureSession();
+
+        const template = this.session!.downloadUrl;
+        const url = template
+            .replace('{accountId}', encodeURIComponent(this.accountId!))
+            .replace('{blobId}', encodeURIComponent(blobId))
+            .replace('{type}', encodeURIComponent(options.type ?? 'application/octet-stream'))
+            .replace('{name}', encodeURIComponent(options.name ?? 'download'));
+
+        const response = await fetch(url, {
+            headers: { Authorization: `Bearer ${this.config.token}` },
+        });
+        if (!response.ok) {
+            throw new Error(`Blob download failed: ${response.status} ${response.statusText}`);
+        }
+
+        const full = Buffer.from(await response.arrayBuffer());
+        const max = options.maxBytes;
+        const truncated = max !== undefined && full.byteLength > max;
+
+        return {
+            bytes: truncated ? full.subarray(0, max) : full,
+            contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+            truncated,
+        };
+    }
+
+    /**
      * Create a draft without sending it.
      *
      * Identical to `sendEmail` minus the EmailSubmission: JMAP already creates a
