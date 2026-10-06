@@ -127,6 +127,74 @@ export const WELL_KNOWN_MAILBOX_ROLES: Readonly<Record<string, string>> = {
     templates: 'templates',
 };
 
+/** What both a draft and a sent message are built from. */
+export interface DraftFields {
+    to: string[];
+    subject: string;
+    textBody: string;
+    htmlBody?: string;
+    cc?: string[];
+    bcc?: string[];
+    replyTo?: string;
+    inReplyTo?: string;
+    references?: string[];
+}
+
+/**
+ * The JMAP Email object for a draft.
+ *
+ * Shared by `sendEmail` and `createDraft`, because a sent message *is* a draft
+ * that was then submitted -- JMAP creates it in Drafts with `$draft` either way,
+ * and sending only adds an EmailSubmission. Building it twice would let the two
+ * drift, and the difference would surface as a message that looks right in
+ * Drafts and wrong once sent.
+ */
+export function buildDraftEmail(
+    params: DraftFields,
+    draftsMailboxId: string,
+    identity: { email: string; name?: string | null }
+): Record<string, unknown> {
+    const email: Record<string, unknown> = {
+        mailboxIds: { [draftsMailboxId]: true },
+        from: [{ email: identity.email, name: identity.name || null }],
+        to: params.to.map((address) => ({ email: address, name: null })),
+        subject: params.subject,
+        textBody: [{ partId: 'text', type: 'text/plain' }],
+        bodyValues: {
+            text: { value: params.textBody, isEncodingProblem: false, isTruncated: false },
+        },
+        keywords: { $draft: true },
+    };
+
+    if (params.cc && params.cc.length > 0) {
+        email.cc = params.cc.map((address) => ({ email: address, name: null }));
+    }
+    if (params.bcc && params.bcc.length > 0) {
+        email.bcc = params.bcc.map((address) => ({ email: address, name: null }));
+    }
+    if (params.replyTo) {
+        email.replyTo = [{ email: params.replyTo, name: null }];
+    }
+    if (params.htmlBody) {
+        email.htmlBody = [{ partId: 'html', type: 'text/html' }];
+        (email.bodyValues as Record<string, unknown>).html = {
+            value: params.htmlBody,
+            isEncodingProblem: false,
+            isTruncated: false,
+        };
+    }
+    // Threading. Without these a reply opens a new conversation -- which looks
+    // correct in a Drafts list and wrong in every client that threads.
+    if (params.inReplyTo) {
+        email.inReplyTo = [params.inReplyTo];
+    }
+    if (params.references && params.references.length > 0) {
+        email.references = params.references;
+    }
+
+    return email;
+}
+
 export class JMAPClient {
     private session: JMAPSession | null = null;
     private accountId: string | null = null;
@@ -722,6 +790,64 @@ export class JMAPClient {
     }
 
     /**
+     * Create a draft without sending it.
+     *
+     * Identical to `sendEmail` minus the EmailSubmission: JMAP already creates a
+     * draft in the Drafts mailbox with `$draft` as the first half of sending, so
+     * this is that half on its own.
+     *
+     * The caller gets a message they can read and edit before anyone else sees
+     * it, which is the whole point -- sending is not a smaller version of
+     * drafting.
+     */
+    async createDraft(params: DraftFields): Promise<{ emailId: string; mailboxId: string }> {
+        await this.ensureSession();
+
+        const identities = await this.getIdentities();
+        if (identities.length === 0) {
+            throw new Error('No sending identity found');
+        }
+
+        // Drafts only. sendEmail falls back to Inbox because the message is
+        // leaving immediately; a draft that silently landed in the Inbox would
+        // be lost rather than merely misfiled.
+        const drafts = await this.getMailboxByRole('drafts');
+        if (!drafts) {
+            throw new Error(
+                'No Drafts mailbox found on this account, so there is nowhere to put a draft.'
+            );
+        }
+
+        const response = await this.request([
+            ['Email/set', {
+                accountId: this.accountId,
+                create: { draft: buildDraftEmail(params, drafts.id, identities[0]) },
+            }, 'a'],
+        ]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`Email/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            created?: Record<string, { id: string }>;
+            notCreated?: Record<string, unknown>;
+        };
+        if (setResult.notCreated) {
+            throw new Error(`Failed to create draft: ${JSON.stringify(setResult.notCreated)}`);
+        }
+        const emailId = setResult.created?.draft?.id;
+        if (!emailId) {
+            // A create that reports neither success nor failure must not be
+            // reported as a success with an empty id.
+            throw new Error('Draft creation returned no id and no error');
+        }
+
+        return { emailId, mailboxId: drafts.id };
+    }
+
+    /**
      * Create and send an email
      */
     async sendEmail(params: {
@@ -750,42 +876,7 @@ export class JMAPClient {
             throw new Error('No drafts or inbox mailbox found');
         }
 
-        // Create the email and submit in one request using result references
-        const emailCreate: Record<string, unknown> = {
-            mailboxIds: { [drafts.id]: true },
-            from: [{ email: identity.email, name: identity.name || null }],
-            to: params.to.map(email => ({ email, name: null })),
-            subject: params.subject,
-            textBody: [{ partId: 'text', type: 'text/plain' }],
-            bodyValues: {
-                text: { value: params.textBody, isEncodingProblem: false, isTruncated: false },
-            },
-            keywords: { $draft: true },
-        };
-
-        if (params.cc && params.cc.length > 0) {
-            emailCreate.cc = params.cc.map(email => ({ email, name: null }));
-        }
-        if (params.bcc && params.bcc.length > 0) {
-            emailCreate.bcc = params.bcc.map(email => ({ email, name: null }));
-        }
-        if (params.replyTo) {
-            emailCreate.replyTo = [{ email: params.replyTo, name: null }];
-        }
-        if (params.htmlBody) {
-            emailCreate.htmlBody = [{ partId: 'html', type: 'text/html' }];
-            (emailCreate.bodyValues as Record<string, unknown>).html = {
-                value: params.htmlBody,
-                isEncodingProblem: false,
-                isTruncated: false
-            };
-        }
-        if (params.inReplyTo) {
-            emailCreate.inReplyTo = [params.inReplyTo];
-        }
-        if (params.references) {
-            emailCreate.references = params.references;
-        }
+        const emailCreate = buildDraftEmail(params, drafts.id, identity);
 
         const response = await this.request([
             ['Email/set', {

@@ -12,6 +12,8 @@ export {
     clearClientCache,
     WELL_KNOWN_MAILBOX_ROLES,
     capabilitiesFor,
+    buildDraftEmail,
+    type DraftFields,
     JMAP_CAPABILITIES,
 } from './jmap-client.js';
 
