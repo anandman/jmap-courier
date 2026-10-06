@@ -164,6 +164,18 @@ export interface DraftFields {
  * does. An address on a domain with neither is genuinely not sendable, and is
  * refused rather than quietly replaced.
  */
+/**
+ * A filename safe to place in a URL path segment.
+ *
+ * Path separators are the only characters that matter: percent-encoded they
+ * become %2F or %5C, which servers commonly refuse in a path. Everything else
+ * survives encodeURIComponent.
+ */
+export function safeDownloadName(name: string | undefined): string {
+    const cleaned = (name ?? '').replace(/[/\\]+/g, '_').trim();
+    return cleaned.length > 0 ? cleaned : 'download';
+}
+
 export function matchIdentity<T extends { email: string }>(
     identities: readonly T[],
     from: string
@@ -891,7 +903,13 @@ export class JMAPClient {
             .replace('{accountId}', encodeURIComponent(this.accountId!))
             .replace('{blobId}', encodeURIComponent(blobId))
             .replace('{type}', encodeURIComponent(options.type ?? 'application/octet-stream'))
-            .replace('{name}', encodeURIComponent(options.name ?? 'download'));
+            // The name is a download-filename hint that sits in the URL *path*,
+            // so a separator in it survives encoding as %2F and many servers
+            // reject that outright. Observed: six Third Bridge remittance PDFs
+            // named "Bill Payment_00006163/172.pdf" all 404'd, while the same
+            // blob fetched with the separator replaced returned 48774 bytes.
+            // Nothing identifies the blob by name, so rewriting it is free.
+            .replace('{name}', encodeURIComponent(safeDownloadName(options.name)));
 
         const response = await fetch(url, {
             headers: { Authorization: `Bearer ${this.config.token}` },

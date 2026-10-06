@@ -14,6 +14,7 @@ export {
     capabilitiesFor,
     buildDraftEmail,
     matchIdentity,
+    safeDownloadName,
     type DraftFields,
     JMAP_CAPABILITIES,
 } from './jmap-client.js';
