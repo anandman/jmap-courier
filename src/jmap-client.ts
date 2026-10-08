@@ -1128,6 +1128,85 @@ export class JMAPClient {
     }
 
     /**
+     * Submits an existing draft, unchanged.
+     *
+     * The distinction from sendEmail is the whole point: that one composes and
+     * sends in a single step, so there is no artefact a person can read before
+     * anything is irreversible. This one sends exactly the message that is
+     * already sitting in Drafts -- the one a human reviewed, with the
+     * recipients, attachments and threading it already has.
+     *
+     * The identity is chosen by matching the draft's own From address rather
+     * than taking the account's first identity. Sending a reply from the wrong
+     * address is a mistake only the recipient notices.
+     */
+    async sendDraft(emailId: string): Promise<{ emailId: string; submissionId: string }> {
+        await this.ensureSession();
+
+        const [email] = await this.getEmails([emailId]);
+        if (!email) {
+            throw new Error(`No message with id ${emailId}`);
+        }
+
+        const drafts = await this.getMailboxByRole('drafts');
+        if (!drafts || email.mailboxIds?.[drafts.id] !== true) {
+            throw new Error(
+                `${emailId} is not in Drafts. Only a draft can be submitted; a message that has already been sent cannot be sent again.`
+            );
+        }
+
+        const identities = await this.getIdentities();
+        const fromAddress = email.from?.[0]?.email;
+        const identity = fromAddress ? matchIdentity(identities, fromAddress) : identities[0];
+        if (!identity) {
+            throw new Error(
+                fromAddress
+                    ? `No identity on this account authorises sending as "${fromAddress}", so this draft cannot be submitted. Change its From address with update_draft.`
+                    : 'This draft has no From address and no identity could be chosen for it.'
+            );
+        }
+
+        const response = await this.request([
+            ['EmailSubmission/set', {
+                accountId: this.accountId,
+                create: {
+                    submission: { identityId: identity.id, emailId },
+                },
+                onSuccessUpdateEmail: {
+                    '#submission': {
+                        mailboxIds: null, // Let the server file it in Sent.
+                        'keywords/$draft': null,
+                        'keywords/$seen': true,
+                    },
+                },
+            }, 'a'],
+        ]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`Submission failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            created?: Record<string, { id: string }>;
+            notCreated?: Record<string, { type: string; description?: string }>;
+        };
+        if (setResult.notCreated && Object.keys(setResult.notCreated).length > 0) {
+            throw new Error(`Failed to send draft: ${JSON.stringify(setResult.notCreated)}`);
+        }
+
+        const submissionId = setResult.created?.submission?.id;
+        if (!submissionId) {
+            // A submission that reports neither success nor failure must not be
+            // reported as sent: the one thing worse than failing to send is
+            // saying it was sent when nobody knows.
+            throw new Error('The server accepted the submission but returned no id, so it is unclear whether the message was sent.');
+        }
+
+        return { emailId, submissionId };
+    }
+
+    /**
      * Forward an email
      */
     async forwardEmail(params: {
