@@ -718,6 +718,28 @@ export class JMAPClient {
      * Update email properties (mailboxIds, keywords)
      */
     async updateEmails(updates: Record<string, Record<string, unknown>>): Promise<void> {
+        const outcome = await this.updateEmailsDetailed(updates);
+        const failed = Object.keys(outcome.notUpdated);
+        if (failed.length > 0) {
+            throw new Error(`Failed to update some emails: ${JSON.stringify(outcome.notUpdated)}`);
+        }
+    }
+
+    /**
+     * Updates emails and reports what happened to each one.
+     *
+     * JMAP applies an Email/set per id, so a batch can half succeed. The
+     * throwing wrapper above turns that into a single failure, which loses the
+     * fact that most of the batch went through -- a caller told "failed" after
+     * 97 of 100 messages moved has been misinformed in a way it cannot detect.
+     * Callers that can report per message should use this instead.
+     */
+    async updateEmailsDetailed(
+        updates: Record<string, Record<string, unknown>>
+    ): Promise<{
+        updated: string[];
+        notUpdated: Record<string, { type: string; description?: string }>;
+    }> {
         await this.ensureSession();
 
         const response = await this.request([
@@ -732,10 +754,18 @@ export class JMAPClient {
             throw new Error(`Email/set failed: ${JSON.stringify(result)}`);
         }
 
-        const setResult = result as { notUpdated?: Record<string, { type: string; description?: string }> };
-        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
-            throw new Error(`Failed to update some emails: ${JSON.stringify(setResult.notUpdated)}`);
-        }
+        const setResult = result as {
+            updated?: Record<string, unknown> | null;
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+        const notUpdated = setResult.notUpdated ?? {};
+        // `updated` carries only ids the server chose to echo, so membership is
+        // derived from the request minus the explicit failures rather than read
+        // from it -- a server that returns `updated: null` on full success
+        // would otherwise look like a total failure.
+        const updated = Object.keys(updates).filter((id) => !(id in notUpdated));
+
+        return { updated, notUpdated };
     }
 
     /**
