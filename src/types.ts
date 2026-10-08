@@ -394,3 +394,45 @@ export interface ContactCardFilter {
     text?: string;
 }
 
+
+/**
+ * The account's auto-reply (RFC 8621 section 8).
+ *
+ * A singleton: there is exactly one, with the id "singleton", so it is fetched
+ * by id rather than queried.
+ */
+export interface VacationResponse {
+    id: string;
+    isEnabled: boolean;
+    /** ISO 8601, or null for "from now". */
+    fromDate: string | null;
+    /** ISO 8601, or null for "until turned off". */
+    toDate: string | null;
+    subject: string | null;
+    textBody: string | null;
+    htmlBody: string | null;
+    /** Fastmail extensions, present on its VacationResponse and not in the RFC. */
+    isToContactsOnly?: boolean;
+    excludeContactsFromBlacklist?: boolean;
+}
+
+export type MaskedEmailState = 'pending' | 'enabled' | 'disabled' | 'deleted';
+
+/**
+ * A masked address (Fastmail extension, no RFC).
+ *
+ * `pending` is the state a newly created address holds until it receives its
+ * first message; Fastmail reclaims pending addresses that never do.
+ */
+export interface MaskedEmail {
+    id: string;
+    email: string;
+    state: MaskedEmailState;
+    /** The site it was made for. Fastmail uses this to label and group them. */
+    forDomain: string;
+    description: string;
+    createdAt: string;
+    createdBy: string;
+    lastMessageAt: string | null;
+    url: string | null;
+}

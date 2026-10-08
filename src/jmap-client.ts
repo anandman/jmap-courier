@@ -16,6 +16,9 @@ import type {
     EmailQuery,
     EmailFilter,
     EmailFilterExpression,
+    MaskedEmail,
+    MaskedEmailState,
+    VacationResponse,
     EmailSort,
     Identity,
     AddressBook,
@@ -49,6 +52,9 @@ export const JMAP_CAPABILITIES = {
     mail: 'urn:ietf:params:jmap:mail',
     submission: 'urn:ietf:params:jmap:submission',
     contacts: 'urn:ietf:params:jmap:contacts',
+    vacation: 'urn:ietf:params:jmap:vacationresponse',
+    /** Fastmail's own extension; no RFC, and absent on other providers. */
+    maskedEmail: 'https://www.fastmail.com/dev/maskedemail',
 };
 
 /**
@@ -76,6 +82,8 @@ const TYPE_CAPABILITIES: Record<string, string> = {
     ContactCard: JMAP_CAPABILITIES.contacts,
     Contact: JMAP_CAPABILITIES.contacts,
     ContactGroup: JMAP_CAPABILITIES.contacts,
+    VacationResponse: JMAP_CAPABILITIES.vacation,
+    MaskedEmail: JMAP_CAPABILITIES.maskedEmail,
 };
 
 /**
@@ -90,6 +98,8 @@ const CAPABILITY_LABELS: Record<string, string> = {
     [JMAP_CAPABILITIES.mail]: 'read mail',
     [JMAP_CAPABILITIES.submission]: 'send mail',
     [JMAP_CAPABILITIES.contacts]: 'access contacts',
+    [JMAP_CAPABILITIES.vacation]: 'read or change the auto-reply',
+    [JMAP_CAPABILITIES.maskedEmail]: 'use masked addresses',
 };
 
 export function capabilitiesFor(methodCalls: JMAPMethodCall[]): string[] {
@@ -1166,6 +1176,137 @@ export class JMAPClient {
             emailId: emailSetResult.created?.draft?.id || '',
             submissionId: submissionSetResult.created?.submission?.id || '',
         };
+    }
+
+    /**
+     * The account's auto-reply settings.
+     *
+     * A singleton with the id "singleton" (RFC 8621 section 8), so this is a
+     * get of one known object rather than a query.
+     */
+    async getVacationResponse(): Promise<VacationResponse> {
+        await this.ensureSession();
+        const accountId =
+            this.session!.primaryAccounts[JMAP_CAPABILITIES.vacation] || this.accountId!;
+
+        const response = await this.request(
+[['VacationResponse/get', { accountId, ids: ['singleton'] }, 'v']]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`VacationResponse/get failed: ${JSON.stringify(result)}`);
+        }
+
+        const list = (result as { list: VacationResponse[] }).list;
+        if (!list?.length) {
+            throw new Error('The server returned no vacation response settings.');
+        }
+        return list[0];
+    }
+
+    /** Patches the auto-reply. Only the named properties change. */
+    async setVacationResponse(patch: Partial<VacationResponse>): Promise<VacationResponse> {
+        await this.ensureSession();
+        const accountId =
+            this.session!.primaryAccounts[JMAP_CAPABILITIES.vacation] || this.accountId!;
+
+        const response = await this.request(
+[['VacationResponse/set', { accountId, update: { singleton: patch } }, 'v']]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`VacationResponse/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
+            throw new Error(
+                `The server refused the change: ${JSON.stringify(setResult.notUpdated)}`
+            );
+        }
+
+        // Read back rather than echo the patch: the server fills in defaults and
+        // may normalise dates, and reporting what was asked for instead of what
+        // is now stored is how a setting comes to look applied when it is not.
+        return this.getVacationResponse();
+    }
+
+    /** Every masked address on the account. Fastmail extension; get-only, no query. */
+    async getMaskedEmails(): Promise<MaskedEmail[]> {
+        await this.ensureSession();
+        const accountId =
+            this.session!.primaryAccounts[JMAP_CAPABILITIES.maskedEmail] || this.accountId!;
+
+        const response = await this.request(
+[['MaskedEmail/get', { accountId, ids: null }, 'm']]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`MaskedEmail/get failed: ${JSON.stringify(result)}`);
+        }
+        return (result as { list: MaskedEmail[] }).list ?? [];
+    }
+
+    async createMaskedEmail(params: {
+        forDomain?: string;
+        description?: string;
+        state?: MaskedEmailState;
+        emailPrefix?: string;
+    }): Promise<MaskedEmail> {
+        await this.ensureSession();
+        const accountId =
+            this.session!.primaryAccounts[JMAP_CAPABILITIES.maskedEmail] || this.accountId!;
+
+        const response = await this.request(
+[['MaskedEmail/set', { accountId, create: { new: params } }, 'm']]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`MaskedEmail/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            created?: Record<string, MaskedEmail>;
+            notCreated?: Record<string, { type: string; description?: string }>;
+        };
+        if (setResult.notCreated && Object.keys(setResult.notCreated).length > 0) {
+            throw new Error(`Failed to create a masked address: ${JSON.stringify(setResult.notCreated)}`);
+        }
+
+        const created = setResult.created?.new;
+        if (!created?.email) {
+            // An address that was maybe created, with no address returned, is
+            // worse than a failure: nothing downstream can use it and nothing
+            // can tell whether it exists.
+            throw new Error('The server accepted the request but returned no masked address.');
+        }
+        return created;
+    }
+
+    async updateMaskedEmail(
+        id: string,
+        patch: { state?: MaskedEmailState; description?: string; forDomain?: string }
+    ): Promise<void> {
+        await this.ensureSession();
+        const accountId =
+            this.session!.primaryAccounts[JMAP_CAPABILITIES.maskedEmail] || this.accountId!;
+
+        const response = await this.request(
+[['MaskedEmail/set', { accountId, update: { [id]: patch } }, 'm']]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`MaskedEmail/set failed: ${JSON.stringify(result)}`);
+        }
+
+        const setResult = result as {
+            notUpdated?: Record<string, { type: string; description?: string }>;
+        };
+        if (setResult.notUpdated && Object.keys(setResult.notUpdated).length > 0) {
+            throw new Error(`The server refused the change: ${JSON.stringify(setResult.notUpdated)}`);
+        }
     }
 
     /**

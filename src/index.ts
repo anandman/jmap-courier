@@ -40,6 +40,9 @@ export type {
     EmailFilter,
     EmailFilterExpression,
     EmailFilterOperator,
+    MaskedEmail,
+    MaskedEmailState,
+    VacationResponse,
     EmailSort,
 } from './types.js';
 
