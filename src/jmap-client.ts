@@ -647,6 +647,42 @@ export class JMAPClient {
     /**
      * Get emails by ID with specified properties
      */
+    /**
+     * Fetches several messages WITH their bodies, in one request.
+     *
+     * getEmailWithBody handles one message, so reading a shortlist of twenty
+     * cost twenty round trips. A consumer measured 0.38s per message and
+     * reported a 79-message backfill at 30s -- longer than its entire
+     * eleven-query search of ten thousand messages.
+     */
+    async getEmailsWithBodies(ids: string[]): Promise<Email[]> {
+        if (ids.length === 0) return [];
+        await this.ensureSession();
+
+        const response = await this.request([
+            ['Email/get', {
+                accountId: this.accountId,
+                ids,
+                properties: [
+                    ...EMAIL_SUMMARY_PROPERTIES,
+                    'bodyStructure',
+                    'bodyValues',
+                    'textBody',
+                    'htmlBody',
+                    'attachments',
+                ],
+                fetchAllBodyValues: true,
+            }, 'a'],
+        ]);
+
+        const [name, result] = response.methodResponses[0];
+        if (name === 'error') {
+            throw new Error(`Email/get failed: ${JSON.stringify(result)}`);
+        }
+
+        return (result as { list: Email[] }).list;
+    }
+
     async getEmails(ids: string[], properties?: string[]): Promise<Email[]> {
         await this.ensureSession();
 
