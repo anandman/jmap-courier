@@ -321,7 +321,18 @@ export interface AddressBook {
 
 export interface ContactCard {
     id: string;
-    addressBookId?: string;
+    /**
+     * RFC 9610 section 2: a card belongs to address books through a MAP, the
+     * same shape Email uses for mailboxIds. It is not a single id, and sending
+     * `addressBookId` is rejected as an invalid property.
+     */
+    addressBookIds?: Record<string, boolean>;
+    /**
+     * JSContact envelope (RFC 9553). Fastmail requires both on create and
+     * returns both on every stored card; omitting them fails the set.
+     */
+    '@type'?: 'Card';
+    version?: string;
     uid?: string;
     prodId?: string;
     kind?: 'individual' | 'group' | 'org' | 'location' | 'device' | 'application';
@@ -330,11 +341,21 @@ export interface ContactCard {
     phones?: Record<string, ContactPhone>;
     addresses?: Record<string, ContactAddress>;
     organizations?: Record<string, ContactOrganization>;
-    notes?: string;
+    /**
+     * A map of Note objects, not a string. RFC 9553 section 2.8.1.
+     */
+    notes?: Record<string, { '@type'?: 'Note'; note: string }>;
 }
 
 export interface ContactName {
-    fullName?: string;
+    /**
+     * The assembled name, as RFC 9553 spells it. This was read as `fullName`,
+     * which no server sets -- so every contact came back with a null name while
+     * the data was there all along.
+     */
+    full?: string;
+    /** Structured parts: given, surname, and the rest. Present on real cards. */
+    components?: { kind?: string; value?: string }[];
 }
 
 export interface ContactEmail {

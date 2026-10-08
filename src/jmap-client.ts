@@ -1526,8 +1526,14 @@ export class JMAPClient {
                 accountId: contactsAccountId,
                 create: {
                     'new-contact': {
+                        // The JSContact envelope. Fastmail rejects a create
+                        // without these, reporting them as invalid properties
+                        // alongside the one that genuinely was wrong.
+                        '@type': 'Card',
+                        version: '1.0',
                         ...card,
-                        addressBookId,
+                        // A map, not a single id -- the same shape as mailboxIds.
+                        addressBookIds: { [addressBookId]: true },
                     }
                 }
             }, 'a'],
