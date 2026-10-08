@@ -37,6 +37,11 @@ const EMAIL_SUMMARY_PROPERTIES = [
     // Header-derived, and free on this same Email/get -- no extra round trip
     // and no body fetch. Callers need messageId to build a message:// link.
     'messageId', 'inReplyTo', 'references',
+    // RFC 8058/2369. Whether a message can be unsubscribed from is the single
+    // most useful fact about a newsletter during triage, and without it an
+    // agent can only ever propose deleting one -- which does not stop more
+    // arriving. Null on ordinary mail, so it costs almost nothing to carry.
+    'header:List-Unsubscribe:asURLs',
 ];
 
 export const JMAP_CAPABILITIES = {

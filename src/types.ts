@@ -84,6 +84,11 @@ export interface Email {
     size: number;
     receivedAt: string;
     messageId: string[] | null;
+    /**
+     * Unsubscribe targets from the List-Unsubscribe header (RFC 2369), as URLs.
+     * Null on anything that is not a bulk mailing.
+     */
+    'header:List-Unsubscribe:asURLs'?: string[] | null;
     inReplyTo: string[] | null;
     references: string[] | null;
     sender: EmailAddress[] | null;
@@ -276,6 +281,12 @@ export interface EmailChanges {
 
 export interface EmailSummary {
     id: string;
+    /**
+     * Unsubscribe targets from List-Unsubscribe, or null when the message is
+     * not bulk mail. Reported so a person can see the option; nothing here acts
+     * on it.
+     */
+    unsubscribe?: string[] | null;
     threadId: string;
     /**
      * RFC 5322 Message-ID. An array because the header may legally repeat,
