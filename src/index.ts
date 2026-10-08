@@ -38,6 +38,8 @@ export type {
     EmailSummary,
     EmailChanges,
     EmailFilter,
+    EmailFilterExpression,
+    EmailFilterOperator,
     EmailSort,
 } from './types.js';
 

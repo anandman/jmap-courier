@@ -184,7 +184,7 @@ export interface DeliveryStatus {
 
 export interface EmailQuery {
     accountId: string;
-    filter?: EmailFilter;
+    filter?: EmailFilterExpression;
     sort?: EmailSort[];
     position?: number;
     anchor?: string;
@@ -192,6 +192,21 @@ export interface EmailQuery {
     limit?: number;
     calculateTotal?: boolean;
 }
+
+/**
+ * A boolean combination of filters (RFC 8620 section 5.5).
+ *
+ * JMAP has supported this all along; nothing here exposed it, so a caller
+ * wanting "from any of these ten senders" had to issue ten separate queries.
+ * A consumer measured its entire 26.8s full fetch as eleven paged searches
+ * that one OR would have collapsed into two.
+ */
+export interface EmailFilterOperator {
+    operator: 'AND' | 'OR' | 'NOT';
+    conditions: EmailFilterExpression[];
+}
+
+export type EmailFilterExpression = EmailFilter | EmailFilterOperator;
 
 export interface EmailFilter {
     inMailbox?: string;

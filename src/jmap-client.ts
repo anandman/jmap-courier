@@ -15,6 +15,7 @@ import type {
     EmailChanges,
     EmailQuery,
     EmailFilter,
+    EmailFilterExpression,
     EmailSort,
     Identity,
     AddressBook,
@@ -491,7 +492,7 @@ export class JMAPClient {
     /**
      * Query emails with filters
      */
-    async queryEmails(filter?: EmailFilter, sort?: EmailSort[], limit = 50): Promise<string[]> {
+    async queryEmails(filter?: EmailFilterExpression, sort?: EmailSort[], limit = 50): Promise<string[]> {
         const { ids } = await this.queryEmailsPage(filter, sort, { limit });
         return ids;
     }
@@ -507,7 +508,7 @@ export class JMAPClient {
      * throwing it away.
      */
     async queryEmailsPage(
-        filter?: EmailFilter,
+        filter?: EmailFilterExpression,
         sort?: EmailSort[],
         options: { limit?: number; position?: number } = {}
     ): Promise<{ ids: string[]; total: number; position: number }> {
