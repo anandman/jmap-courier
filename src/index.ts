@@ -6,6 +6,7 @@
  */
 
 // Core client
+export { UpstreamAuthError, isUpstreamAuthError } from './upstream-error.js';
 export {
     JMAPClient,
     getClient,

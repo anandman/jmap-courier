@@ -4,6 +4,7 @@
  * Works with any JMAP-compliant email provider
  */
 
+import { UpstreamAuthError } from './upstream-error.js';
 import type {
     JMAPSession,
     JMAPRequest,
@@ -284,6 +285,15 @@ export class JMAPClient {
 
         if (!response.ok) {
             const errorText = await response.text();
+            // A refused credential is raised as its own type so a consumer can
+            // tell it from a bad argument without reading prose. Everything
+            // else stays an ordinary Error.
+            if (response.status === 401 || response.status === 403) {
+                throw new UpstreamAuthError(
+                    `The mail provider rejected this account's API token: ${response.status} ${response.statusText} - ${errorText}`,
+                    { status: response.status, service: 'jmap' }
+                );
+            }
             throw new Error(`Failed to fetch JMAP session: ${response.status} ${response.statusText} - ${errorText}`);
         }
 
